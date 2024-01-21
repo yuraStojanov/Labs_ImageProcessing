@@ -1,0 +1,103 @@
+import cv2 as cv
+import numpy as np
+import math
+from matplotlib import pyplot as plt
+from matplotlib import transforms
+#import drawGraph
+
+fp = "C:/Users/admin/Desktop/ITMO/Image_Processing/"
+img = cv.imread(fp+ "buscemi.png", cv.IMREAD_GRAYSCALE)
+img_profile = cv.imread(fp+ "profile.png", cv.IMREAD_GRAYSCALE)
+img_proj = cv.imread(fp+ "proj.png", cv.IMREAD_GRAYSCALE)
+assert img is not None, "file could not be read, check with os.path.exists()"
+
+numRows = img.shape[0]
+numCols = img.shape[1]
+
+
+N = 256
+histr = cv.calcHist([img],None,None,[N],[0,N])
+
+#img_arithm = img - 50/255
+
+if img.dtype == np.uint8 :
+    img32 = img.astype(np.float32) / 255
+else:
+    img32 = img
+
+array = [img32, img32, img32, img32, img32, img32, img32] # .copy() ? 
+
+alpha = 0.5
+array[0] = img32 - 50/255
+array[1] = np.clip ((((img32 - img32.min()) / (img32.max() - img32.min())) ** alpha ),0, 1)
+CH = np.cumsum(histr) / (numRows * numCols)
+array[2] = (img32.max() - img32.min()) * CH[img] + img32.min()
+array[3] = img.min() - (1/alpha)*np.log(1-CH[img].clip(0.001,0.999)).clip(-10,0)
+array[4] = img32.min() + np.sqrt(2 * alpha ** 2 *np.log(1 / (1 - CH[img].clip(0.001,0.999)))) #.clip(0.001,0.999) -- костыль чтобы убрать ворнинг
+array[5] = CH[img] ** (2/3)
+array[6] = (img32.min()+0.04)** CH[img] # сделать с лут?
+
+
+for i in range(len(array)):
+    if array[i].dtype != np.uint8 :
+        array[i] = (array[i]*255).clip(0, 255).astype(np.uint8)
+
+
+#print(CH[])
+
+equ = cv.equalizeHist(img)
+res = np.hstack((img,equ)) 
+
+clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+cl1 = clahe.apply(img)
+
+profile =  img_profile[ round ( img_profile.shape[0] / 2) , :]
+
+
+plt.figure('profile')
+plt.plot(profile)#profile
+plt.xlim([0,N])
+
+plt.show()
+
+
+#base = plt.gca().transData
+#rot = transforms.Affine2D().rotate_deg(90)
+# plt.plot(Proj_img, transform = rot+base)
+#print(rot,'|',base)
+
+ProjY_img = np.sum(img_proj, 1)/255
+plt.figure('projection Oy')
+plt.plot(ProjY_img)
+plt.savefig(fp+"ProjY.png")
+ProjX_img = np.sum(img_proj, 0)/255
+plt.figure('projection Ox')
+plt.plot(ProjX_img)
+plt.savefig(fp+"ProjX.png")
+
+
+
+
+ProjX = cv.imread(fp+ "ProjX.png", cv.IMREAD_COLOR) #-- костыль, найти как не сохраняя сразу это сделать
+ProjY = cv.rotate(cv.imread(fp+ "ProjY.png", cv.IMREAD_COLOR), cv.ROTATE_90_CLOCKWISE)
+
+
+cv.imshow("ProjX",ProjX)
+cv.imshow("ProjY",ProjY)
+cv.imshow("Proj",img_proj)
+
+cv.waitKey(0)
+
+
+cv.imshow("Steve Buscemi",img)
+cv.imshow("Steve Buscemi arithm",array[0])
+cv.imshow("Steve Buscemi dynamic",array[1])
+cv.imshow("Steve Buscemi cs",array[2])
+cv.imshow("Steve Buscemi exp",array[3])
+cv.imshow("Steve Buscemi releigh",array[4])
+cv.imshow("Steve Buscemi 2/3",array[5])
+cv.imshow("Steve Buscemi hyper",array[6])
+cv.imshow("Steve Buscemi equ",equ)
+cv.imshow("Steve Buscemi clache",cl1)
+cv.waitKey(0)
+cv.destroyAllWindows()

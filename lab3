@@ -1,0 +1,304 @@
+import cv2 as cv
+import numpy as np
+import math
+from matplotlib import pyplot as plt
+import scipy
+
+
+
+fp = "C:/Users/admin/Desktop/ITMO/Image_Processing/"
+img = cv.imread(fp+ "buscemi.png", cv.IMREAD_GRAYSCALE)
+# Noise parameter
+d = 0.05
+# Salt vs pepper distribution
+s_vs_p = 0.5
+# Generate radnom numbers
+rng = np.random.default_rng ()
+vals = rng.random(img.shape )
+# Salt
+img_sp = np.copy ( img )
+if img_sp.dtype == np.uint8 :
+    img_sp[ vals < d * s_vs_p ] = 255
+else:
+    img_sp[ vals < d * s_vs_p ] = 1.0
+# Pepper
+img_sp[np.logical_and ( vals >= d * s_vs_p,vals < d )] = 0
+
+# Variance parameter
+var = 0.05
+# Generate radnom numbers
+rng = np .random .default_rng()
+gauss = rng.normal(0,var ** 0.5, img.shape )
+# Process uchar and float images separately
+if img.dtype == np.uint8 :
+    img_f = img.astype(np.float32 )
+    img_mult = (img_f + img_f * gauss).clip(0, 255).astype(np.uint8 )
+else :
+    img_mult = img + img * gauss
+    
+# Mean parameter
+mean = 0
+# Variance parameter
+var = 0.01
+# Generate radnom numbers
+rng = np.random.default_rng ()
+gauss = rng.normal (mean, var ** 0.5,img.shape )
+# Process uchar and float images separately
+if img.dtype == np.uint8 :
+    img_add = (img.astype(np.float32) + gauss * 255).clip (0 , 255).astype(np.uint8 )
+else :
+    img_add = (img + gauss).astype(np.float32)
+
+rng = np.random.default_rng ()
+if img.dtype == np.uint8:
+    img_f = img.astype ( np.float32 ) / 255
+    vals = len(np.unique(img_f))
+    vals = 2 ** np.ceil ( np . log2 ( vals ))
+    img_quant = (255 * ( rng.poisson( img_f * vals ) /float ( vals )). clip (0 , 1)).astype ( np.uint8 )
+else :
+    vals = len (np.unique (img))
+    vals = 2 ** np.ceil (np.log2 ( vals ))
+    img_quant = rng.poisson(img*vals)/float(vals)
+
+dst = np.zeros(img.shape)
+
+kernel_mean = np.ones((3, 3), np.float32)/9
+filt_mean = cv.filter2D(src=img_add, ddepth=-1, kernel=kernel_mean)
+
+#kernel_geom = np.ones((3, 3), np.float32)/9# не понял как геометрический делать
+kernel_gauss = cv.getGaussianKernel(15,1)
+print(kernel_gauss)
+blur = cv.GaussianBlur(img_add,(15,15),1)
+filt_gauss = cv.filter2D(src=img_add, ddepth=-1, kernel=kernel_gauss)
+
+
+def counter_harmonic_mean_filter(image, kernel_size=3, Q=0):
+    rows, cols = image.shape
+    kernel_mid = kernel_size // 2
+    kernel_k = 1 / pow(kernel_size, 2.0)
+    image_bordered = cv.copyMakeBorder(
+        image,
+        top=kernel_size // 2,
+        bottom=kernel_size // 2 + kernel_size % 2,
+        left=kernel_size // 2,
+        right=kernel_size // 2 + kernel_size % 2,
+        borderType=cv.BORDER_REPLICATE,
+        value=[mean, mean, mean]
+    )
+    
+
+    image_float = np.clip(image / 255.0, 0.0, 1.0)
+    image_bordered_float = np.zeros_like(image_bordered, dtype=np.float64)
+    
+    image_float_power = []
+    for q in range(2):
+        image_float_power.append(np.power(image_float, Q + q))
+        image_float_power[q] = np.clip(image_float_power[q], 0.0, 10)
+    for y in range(-kernel_mid, kernel_mid + kernel_size % 2):
+        for x in range(-kernel_mid, kernel_mid + kernel_size % 2):
+            image_bordered_float[kernel_mid + y:kernel_mid + rows + y,
+            kernel_mid + x:kernel_mid + cols + x] += kernel_k * image_float_power[1] / image_float_power[0]
+    image_bordered_float = np.clip(image_bordered_float, 0.0, 1.0)
+    image = image_bordered_float[kernel_mid:rows+kernel_mid, kernel_mid:cols+kernel_mid] * 255.0
+    return image.astype(np.uint8)
+
+kernel_size = 3
+Q = -0.3
+
+filt_counter = counter_harmonic_mean_filter(img_sp, kernel_size=kernel_size, Q=Q)
+
+filt_med = cv.medianBlur(img_sp, 3)
+
+kernel_wmed = np.random.random(size=(3,3))
+kernel_wmed /= np.max(kernel_wmed)
+filt_wmed = scipy.ndimage.median_filter(img_sp, footprint=kernel_wmed)
+
+# адаптивная фильтрация to do
+def calculate_median(array):
+    """Return the median of 1-d array"""
+    sorted_array = np.sort(array) #timsort (O(nlogn))
+    median = sorted_array[len(array)//2]
+    return median
+def level_A(z_min, z_med, z_max, z_xy, S_xy, S_max):
+    if(z_min < z_med < z_max):
+        return level_B(z_min, z_med, z_max, z_xy, S_xy, S_max)
+    else:
+        S_xy += 2 #increase the size of S_xy to the next odd value.
+        if(S_xy <= S_max): #repeat process
+            return level_A(z_min, z_med, z_max, z_xy, S_xy, S_max)
+        else:
+            return z_med
+def level_B(z_min, z_med, z_max, z_xy, S_xy, S_max):
+    if(z_min < z_xy < z_max):
+        return z_xy
+    else:
+        return z_med
+def amf(image, initial_window, max_window):
+    """runs the Adaptive Median Filter proess on an image"""
+    xlength, ylength = image.shape #get the shape of the image.
+    
+    z_min, z_med, z_max, z_xy = 0, 0, 0, 0
+    S_max = max_window
+    S_xy = initial_window #dynamically to grow
+    
+    output_image = image.copy()
+    
+    for row in range(S_xy, xlength-S_xy-1):
+        for col in range(S_xy, ylength-S_xy-1):
+            filter_window = image[row - S_xy : row + S_xy + 1, col - S_xy : col + S_xy + 1] #filter window
+            target = filter_window.reshape(-1) #make 1-dimensional
+            z_min = np.min(target) #min of intensity values
+            z_max = np.max(target) #max of intensity values
+            z_med = calculate_median(target) #median of intensity values
+            z_xy = image[row, col] #current intensity
+            
+            #Level A & B
+            new_intensity = level_A(z_min, z_med, z_max, z_xy, S_xy, S_max)
+            output_image[row, col] = new_intensity
+    return output_image
+
+filt_Adapt_med = amf(img_sp,3,11)
+
+
+rank = -12
+kernel_rank = np.ones((5,5),np.float64)
+filt_rank = scipy.ndimage.rank_filter(img_sp, footprint=kernel_rank, rank=rank)
+
+rows, cols = img.shape
+
+k_size = (7 , 7)
+kernel = np.ones ((k_size[0], k_size[1]))
+# Convert to float
+# and make image with border
+if img.dtype == np.uint8 :
+    img_copy = img. astype ( np . float32 ) / 255
+else :
+    img_copy_nb = img
+img_copy = cv . copyMakeBorder ( img_copy, int (( k_size [0] - 1) / 2), int ( k_size [0] / 2), int (( k_size [1] - 1) / 2), int ( k_size [1] / 2) ,cv . BORDER_REPLICATE )
+# Split into layers
+bgr_planes = cv . split ( img_copy )
+bgr_planes_2 = []
+k_power = np . power ( kernel , 2)
+# For all layers
+for plane in bgr_planes :
+# Calculate temporary matrices for I ** 2
+    plane_power = np . power ( plane , 2)
+    m = np . zeros ( img. shape [0:2] , np . float32 )
+    q = np . zeros ( img. shape [0:2] , np . float32 )
+# Calculate variance values
+    for i in range ( k_size [0]):
+        for j in range ( k_size [1]):
+            m = m + kernel [i , j ] * \
+            plane [ i : i + rows , j : j + cols ]
+            q = q + k_power [i , j ] * \
+            plane_power [ i : i + rows , j : j + cols ]
+m = m / np . sum ( kernel )
+q = q / np . sum ( kernel )
+q = q - m * m
+# Calculate noise as an average variance
+v = np . sum ( q ) / img . size
+# Do filter
+plane_2 = plane [( k_size [0] - 1) // 2:( k_size [0] - 1) // 2 + rows ,( k_size [1] - 1) // 2:( k_size [1] - 1) // 2 + cols ]
+plane_2 = np . where ( q < v , m , ( plane_2 - m ) * (1 - v / q ) + m )
+bgr_planes_2 . append ( plane_2 )
+# Merge image back
+img_wiener = cv . merge ( bgr_planes_2 )
+# Convert back to uint if needed
+if (img.dtype == np . uint8 ):
+    img_wiener = (255 * img_wiener).clip (0, 255).astype (np.uint8)
+
+
+kernel_Roberts_x = np.array([
+    [1, 0],
+    [0, -1]
+    ])
+kernel_Roberts_y = np.array([
+    [0, 1],
+    [-1, 0]
+    ])
+kernel_Ku = 8.0
+
+filt_roberts = kernel_Ku * np.sqrt(
+    np.power(cv.filter2D(img, -1, kernel_Roberts_x), 2.0) + \
+    np.power(cv.filter2D(img, -1, kernel_Roberts_y), 2.0)
+)
+filt_roberts = np.clip(np.round(filt_roberts), 0, 255).astype(dtype=np.uint8)
+
+kernel_Prewitt_x = np.array([
+    [-1, 0, 1],
+    [-1, 0, 1],
+    [-1, 0, 1]])
+kernel_Prewitt_y = np.array([
+    [1, 1, 1],
+    [0, 0, 0],
+    [-1, -1, -1]])
+kernel_Ku = 2.0
+
+filt_prewitt = kernel_Ku * np.sqrt(
+    np.power(cv.filter2D(img, -1, kernel_Prewitt_x), 2.0) + \
+    np.power(cv.filter2D(img, -1, kernel_Prewitt_y), 2.0)
+)
+
+filt_prewitt = np.clip(np.round(filt_prewitt), 0, 255).astype(dtype=np.uint8)
+
+
+# Оператор Собела
+kernel_Sobel_x = np.array([
+    [-1, 0, 1],
+    [-2, 0, 2],
+    [-1, 0, 1]])
+kernel_Sobel_y = np.array([
+    [1, 2, 1],
+    [0, 0, 0],
+    [-1, -2, -1]])
+kernel_Ku = 2.0
+
+filt_sobel = kernel_Ku * np.sqrt(
+    np.power(cv.filter2D(img, -1, kernel_Sobel_x), 2.0) + \
+    np.power(cv.filter2D(img, -1, kernel_Sobel_y), 2.0)
+)
+filt_sobel = np.clip(np.round(filt_sobel), 0, 255).astype(dtype=np.uint8)
+
+
+kernel_Laplacian_1 = np.array([
+    [0, 1, 0],
+    [1, -4, 1],
+    [0, 1, 0]])
+kernel_Ku = 8.0
+
+filt_laplace = kernel_Ku * cv.filter2D(img, -1, kernel_Laplacian_1)
+filt_laplace = np.clip(np.round(filt_laplace), 0, 255).astype(dtype=np.uint8)
+
+
+
+img_Canny = cv.GaussianBlur(img, (5, 5), 0)
+threshold1 = 65
+threshold2 = 85
+print(f"threshold1 = {threshold1}, threshold2 = {threshold2}")
+filt_Canny = cv.Canny(img_Canny, threshold1, threshold2)
+
+
+
+
+cv.imshow("Buscemi salt and pepper",img_sp)
+cv.imshow("Buscemi mult",img_mult)
+cv.imshow("Buscemi additive",img_add)
+cv.imshow("Buscemi quant",img_quant)
+cv.imshow("Buscemi filt mean",filt_mean)
+cv.imshow("Buscemi filt gauss",filt_gauss)
+cv.imshow("Buscemi filt blur",blur)
+cv.imshow("Buscemi filt counter harmonic",filt_counter)
+cv.imshow("Buscemi filt median",filt_med)
+cv.imshow("Buscemi filt weighted median",filt_wmed)
+cv.imshow("Buscemi filt adaptive median",filt_Adapt_med)
+cv.imshow('Busiemi filt rank',filt_rank)
+cv.imshow('Busiemi filt wiener',img_wiener)
+cv.imshow('Busiemi filt roberts',filt_roberts)
+cv.imshow('Busiemi filt prewitt',filt_prewitt)
+cv.imshow('Busiemi filt laplace',filt_laplace)
+cv.imshow('Busiemi filt sobel',filt_sobel)
+cv.imshow('Busiemi filt Canny',filt_Canny)
+
+
+cv.waitKey(0)
+cv.destroyAllWindows()
